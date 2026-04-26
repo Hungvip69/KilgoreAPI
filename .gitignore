@@ -1,0 +1,8 @@
+bin/
+obj/
+.dotnet_home/
+.tools/
+.github_publish/
+*.user
+*.suo
+*.pdb
