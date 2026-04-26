@@ -17,6 +17,8 @@ public class KilgoreAPI
 
 	public static bool _AutoUpdateLogs = false;
 
+	public static COP.OutputLogger Logger { get; } = new COP.OutputLogger();
+
 	private static readonly object attachedPidsLock = new object();
 
 	private static readonly HashSet<int> attachedPids = new HashSet<int>();
@@ -45,10 +47,22 @@ public class KilgoreAPI
 
 	private static void AutoUpdateLog(string message)
 	{
+		Logger.System(message);
 		if (_AutoUpdateLogs)
 		{
 			Console.WriteLine("[KilgoreAPI] " + message);
 		}
+	}
+
+	public static void UseOutput(bool enabled)
+	{
+		Logger.SetEnabled(enabled);
+		if (enabled)
+		{
+			Logger.StartRobloxLogWatcher(1000);
+			return;
+		}
+		Logger.StopRobloxLogWatcher();
 	}
 
 	public static string Base64Encode(string plainText)
@@ -234,6 +248,7 @@ public class KilgoreAPI
 
 	public void StartCommunication()
 	{
+		Logger.System("Starting communication.");
 		if (!Directory.Exists("Bin"))
 		{
 			Directory.CreateDirectory("Bin");
@@ -273,6 +288,7 @@ public class KilgoreAPI
 		};
 		CommunicationTimer.Start();
 		StartAutoAttachTimer();
+		Logger.Success("Communication started.");
 	}
 
 	public void StopCommunication()
@@ -301,6 +317,7 @@ public class KilgoreAPI
 			injected_pids.Clear();
 		}
 		UntrackAttachedPids(attachedPidSnapshot);
+		Logger.System("Communication stopped.");
 	}
 
 	public bool IsAttached(int pid)
@@ -348,9 +365,11 @@ public class KilgoreAPI
 	{
 		if (IsAttached(pid))
 		{
+			Logger.Info("Process " + pid + " is already attached.");
 			return Task.FromResult(KilgoreStates.Attached);
 		}
 		KilgoreStatus = KilgoreStates.Attaching;
+		Logger.System("Attaching to process " + pid + ".");
 		try
 		{
 			Process process = Process.Start(new ProcessStartInfo
@@ -365,17 +384,20 @@ public class KilgoreAPI
 			if (process == null)
 			{
 				KilgoreStatus = KilgoreStates.Error;
+				Logger.Error("Failed to start injector for process " + pid + ".");
 				return Task.FromResult(KilgoreStates.Error);
 			}
 			process.WaitForExit();
 			process.Dispose();
 			AddAttachedPid(pid);
 			KilgoreStatus = KilgoreStates.Attached;
+			Logger.Success("Attached to process " + pid + ".");
 			return Task.FromResult(KilgoreStates.Attached);
 		}
-		catch (Exception)
+		catch (Exception ex)
 		{
 			KilgoreStatus = KilgoreStates.Error;
+			Logger.Error("Attach failed for process " + pid + ": " + ex.Message);
 			return Task.FromResult(KilgoreStates.Error);
 		}
 	}
@@ -391,6 +413,7 @@ public class KilgoreAPI
 		if (processes.Length == 0)
 		{
 			KilgoreStatus = KilgoreStates.NoProcessFound;
+			Logger.Warning("No Roblox client process found.");
 			return KilgoreStates.NoProcessFound;
 		}
 		KilgoreStates lastResult = KilgoreStates.Attached;
@@ -415,16 +438,19 @@ public class KilgoreAPI
 			}
 		}
 		KilgoreStatus = attachedAny ? KilgoreStates.Attached : lastResult;
+		Logger.System("AttachAPI result: " + KilgoreStatus + ".");
 		return KilgoreStatus;
 	}
 
 	public static void KillRoblox()
 	{
+		int killed = 0;
 		foreach (Process process in Process.GetProcessesByName(RobloxProcessName))
 		{
 			try
 			{
 				process.Kill();
+				killed++;
 			}
 			catch (Exception)
 			{
@@ -434,11 +460,13 @@ public class KilgoreAPI
 				process.Dispose();
 			}
 		}
+		Logger.Warning("KillRoblox closed " + killed + " process(es).");
 	}
 
 	public void SetAutoAttach(bool enabled)
 	{
 		autoAttachEnabled = enabled;
+		Logger.System("Auto attach " + (enabled ? "enabled." : "disabled."));
 		if (enabled)
 		{
 			StartAutoAttachTimer();
@@ -485,12 +513,14 @@ public class KilgoreAPI
 		int[] attachedPids = GetAttachedPidSnapshot();
 		if (attachedPids.Length.Equals(0))
 		{
+			Logger.Warning("ExecuteScript skipped because no process is attached.");
 			return KilgoreStates.NotAttached;
 		}
 		foreach (int injected_pid in attachedPids)
 		{
 			NamedPipes.LuaPipe(Base64Encode(script), injected_pid);
 		}
+		Logger.Success("Executed script in " + attachedPids.Length + " process(es).");
 		return KilgoreStates.Executed;
 	}
 
@@ -499,9 +529,11 @@ public class KilgoreAPI
 		CleanInjectedPids();
 		if (!IsAttached(pid))
 		{
+			Logger.Warning("Execute skipped because process " + pid + " is not attached.");
 			return KilgoreStates.NotAttached;
 		}
 		NamedPipes.LuaPipe(Base64Encode(script), pid);
+		Logger.Success("Executed script in process " + pid + ".");
 		return KilgoreStates.Executed;
 	}
 

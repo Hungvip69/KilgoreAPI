@@ -65,8 +65,64 @@ api.Execute("print('KilgoreAPI')");
 - `KillRoblox()` closes running Roblox client processes.
 - `Base64Encode(string plainText)` and `Base64Decode(string plainText)` handle base64 helpers.
 - `_AutoUpdateLogs` enables or disables auto-update console logging.
+- `UseOutput(bool enabled)` enables or disables output logging and starts/stops the Roblox log watcher.
+- `Logger.OnLog` receives formatted output messages with a `System.Drawing.Color`.
+- `Logger.SetTheme(COP.LogTheme theme)` customizes output colors.
+- `Logger.SetFormat(COP.LogFormat format)` customizes output tags.
+- `Logger.SetLogSource(COP.LogSource source)` filters output by `All`, `System`, or `Roblox`.
+- `Logger.StartRobloxLogWatcher(int intervalMilliseconds)` starts watching the latest Roblox log file.
 
 `KilgoreModule` is also available as a compatibility alias for `KilgoreAPI`.
+
+## Output Usage
+
+```csharp
+using System;
+using System.Drawing;
+using KilgoreAPI;
+
+KilgoreAPI.KilgoreModule.UseOutput(true);
+KilgoreAPI.KilgoreModule.Logger.OnLog += Logger_OnLog;
+
+KilgoreAPI.KilgoreModule.Logger.SetTheme(new COP.LogTheme
+{
+	Info = Color.White,
+	Success = Color.LimeGreen,
+	Warning = Color.Orange,
+	Error = Color.Red,
+	System = Color.Gray
+});
+
+KilgoreAPI.KilgoreModule.Logger.SetFormat(new COP.LogFormat
+{
+	InfoTag = "[INFO]",
+	SuccessTag = "[SUCCESS]",
+	WarningTag = "[WARNING]",
+	ErrorTag = "[ERROR]",
+	SystemTag = "[SYSTEM]"
+});
+
+KilgoreAPI.KilgoreModule.Logger.SetLogSource(COP.LogSource.All);
+
+private void Logger_OnLog(string message, Color color)
+{
+	if (LogsTextBox.InvokeRequired)
+		LogsTextBox.Invoke(new Action(() => AppendLog(message, color)));
+	else
+		AppendLog(message, color);
+}
+
+private void AppendLog(string message, Color color)
+{
+	LogsTextBox.SelectionStart = LogsTextBox.TextLength;
+	LogsTextBox.SelectionLength = 0;
+	LogsTextBox.SelectionColor = color;
+	LogsTextBox.AppendText(message + Environment.NewLine);
+	LogsTextBox.SelectionColor = LogsTextBox.ForeColor;
+}
+```
+
+`UseOutput(true)` enables logger events and starts `StartRobloxLogWatcher(1000)` automatically. You can call `StartRobloxLogWatcher` manually with a different interval if needed; repeated calls are ignored while the watcher is already running.
 
 ## Hosted Assets
 
