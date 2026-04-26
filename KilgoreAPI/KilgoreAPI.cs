@@ -15,6 +15,12 @@ public class KilgoreAPI
 {
 	private const string RobloxProcessName = "RobloxPlayerBeta";
 
+	public static bool _AutoUpdateLogs = false;
+
+	private static readonly object attachedPidsLock = new object();
+
+	private static readonly HashSet<int> attachedPids = new HashSet<int>();
+
 	private HttpClient client = new HttpClient();
 
 	private string current_version_url = "https://raw.githubusercontent.com/Hungvip69/KilgoreAPI/main/assets/current_version.txt";
@@ -36,6 +42,14 @@ public class KilgoreAPI
 	private bool autoAttachEnabled;
 
 	private bool autoAttachInProgress;
+
+	private static void AutoUpdateLog(string message)
+	{
+		if (_AutoUpdateLogs)
+		{
+			Console.WriteLine("[KilgoreAPI] " + message);
+		}
+	}
 
 	public static string Base64Encode(string plainText)
 	{
@@ -66,7 +80,7 @@ public class KilgoreAPI
 		return Convert.FromBase64String(plainText);
 	}
 
-	private bool IsPidRunning(int pid)
+	private static bool IsPidRunning(int pid)
 	{
 		try
 		{
@@ -79,6 +93,33 @@ public class KilgoreAPI
 		}
 	}
 
+	private static void TrackAttachedPid(int pid)
+	{
+		lock (attachedPidsLock)
+		{
+			attachedPids.Add(pid);
+		}
+	}
+
+	private static void UntrackAttachedPids(int[] pids)
+	{
+		lock (attachedPidsLock)
+		{
+			foreach (int pid in pids)
+			{
+				attachedPids.Remove(pid);
+			}
+		}
+	}
+
+	private static void CleanGlobalAttachedPids()
+	{
+		lock (attachedPidsLock)
+		{
+			attachedPids.RemoveWhere(pid => !IsPidRunning(pid));
+		}
+	}
+
 	private void AddAttachedPid(int pid)
 	{
 		lock (injectedPidsLock)
@@ -88,6 +129,7 @@ public class KilgoreAPI
 				injected_pids.Add(pid);
 			}
 		}
+		TrackAttachedPid(pid);
 	}
 
 	private void CleanInjectedPids()
@@ -96,6 +138,7 @@ public class KilgoreAPI
 		{
 			injected_pids.RemoveAll(pid => !IsPidRunning(pid));
 		}
+		CleanGlobalAttachedPids();
 	}
 
 	private int[] GetAttachedPidSnapshot()
@@ -108,17 +151,41 @@ public class KilgoreAPI
 
 	private void AutoUpdate()
 	{
+		AutoUpdateLog("Checking hosted update metadata.");
 		string text = "";
-		HttpResponseMessage result = client.GetAsync(current_download_links_url).Result;
-		DownloadUrlData downloadUrlData = ParseJson(result.Content.ReadAsStringAsync().Result);
-		string requestUri = AESEncryption.Decrypt(downloadUrlData.L1, downloadUrlData.question);
-		string requestUri2 = AESEncryption.Decrypt(downloadUrlData.L2, downloadUrlData.question);
+		HttpResponseMessage result;
+		DownloadUrlData downloadUrlData;
+		string requestUri;
+		string requestUri2;
+		try
+		{
+			result = client.GetAsync(current_download_links_url).Result;
+			if (!result.IsSuccessStatusCode)
+			{
+				AutoUpdateLog("Failed to fetch download metadata. Status: " + (int)result.StatusCode);
+				return;
+			}
+			downloadUrlData = ParseJson(result.Content.ReadAsStringAsync().Result);
+			if (downloadUrlData == null || string.IsNullOrEmpty(downloadUrlData.L1) || string.IsNullOrEmpty(downloadUrlData.L2) || string.IsNullOrEmpty(downloadUrlData.question))
+			{
+				AutoUpdateLog("Download metadata is invalid.");
+				return;
+			}
+			requestUri = AESEncryption.Decrypt(downloadUrlData.L1, downloadUrlData.question);
+			requestUri2 = AESEncryption.Decrypt(downloadUrlData.L2, downloadUrlData.question);
+		}
+		catch (Exception ex)
+		{
+			AutoUpdateLog("Failed to read download metadata: " + ex.Message);
+			return;
+		}
 		try
 		{
 			text = client.GetStringAsync(current_version_url).Result;
 		}
-		catch (Exception)
+		catch (Exception ex)
 		{
+			AutoUpdateLog("Failed to fetch current version: " + ex.Message);
 			return;
 		}
 		string text2 = "";
@@ -128,6 +195,7 @@ public class KilgoreAPI
 		}
 		if (text != text2)
 		{
+			AutoUpdateLog("New runtime files found. Downloading update.");
 			if (File.Exists("Bin\\erto3e4rortoergn.exe"))
 			{
 				File.Delete("Bin\\erto3e4rortoergn.exe");
@@ -137,17 +205,29 @@ public class KilgoreAPI
 				File.Delete("Bin\\Decompiler.exe");
 			}
 			HttpResponseMessage result2 = client.GetAsync(requestUri2).Result;
-			if (result.IsSuccessStatusCode)
+			if (result2.IsSuccessStatusCode)
 			{
 				byte[] result3 = result2.Content.ReadAsByteArrayAsync().Result;
 				File.WriteAllBytes("Bin\\erto3e4rortoergn.exe", result3);
 			}
+			else
+			{
+				AutoUpdateLog("Failed to download injector. Status: " + (int)result2.StatusCode);
+			}
 			HttpResponseMessage result4 = client.GetAsync(requestUri).Result;
-			if (result.IsSuccessStatusCode)
+			if (result4.IsSuccessStatusCode)
 			{
 				byte[] result5 = result4.Content.ReadAsByteArrayAsync().Result;
 				File.WriteAllBytes("Bin\\Decompiler.exe", result5);
 			}
+			else
+			{
+				AutoUpdateLog("Failed to download decompiler. Status: " + (int)result4.StatusCode);
+			}
+		}
+		else
+		{
+			AutoUpdateLog("Runtime files are already current.");
 		}
 		File.WriteAllText("Bin\\current_version.txt", text);
 	}
@@ -215,10 +295,12 @@ public class KilgoreAPI
 			decompilerProcess.Dispose();
 			decompilerProcess = null;
 		}
+		int[] attachedPidSnapshot = GetAttachedPidSnapshot();
 		lock (injectedPidsLock)
 		{
 			injected_pids.Clear();
 		}
+		UntrackAttachedPids(attachedPidSnapshot);
 	}
 
 	public bool IsAttached(int pid)
@@ -235,6 +317,19 @@ public class KilgoreAPI
 		return IsAttached(pid);
 	}
 
+	public static bool IsPIDAttached(int pid, KilgoreAPI api = null)
+	{
+		if (api != null)
+		{
+			return api.IsAttached(pid);
+		}
+		CleanGlobalAttachedPids();
+		lock (attachedPidsLock)
+		{
+			return attachedPids.Contains(pid);
+		}
+	}
+
 	public bool IsAttached()
 	{
 		CleanInjectedPids();
@@ -245,6 +340,11 @@ public class KilgoreAPI
 	}
 
 	public Task<KilgoreStates> Attach(int pid)
+	{
+		return Attach(pid, true);
+	}
+
+	public Task<KilgoreStates> Attach(int pid, bool nocmd)
 	{
 		if (IsAttached(pid))
 		{
@@ -257,7 +357,7 @@ public class KilgoreAPI
 			{
 				FileName = "Bin\\erto3e4rortoergn.exe",
 				Arguments = $"{pid}",
-				CreateNoWindow = true,
+				CreateNoWindow = nocmd,
 				UseShellExecute = false,
 				RedirectStandardError = false,
 				RedirectStandardOutput = false
@@ -280,7 +380,12 @@ public class KilgoreAPI
 		}
 	}
 
-	public async Task<KilgoreStates> AttachAPI()
+	public Task<KilgoreStates> AttachAPI()
+	{
+		return AttachAPI(true);
+	}
+
+	public async Task<KilgoreStates> AttachAPI(bool nocmd)
 	{
 		Process[] processes = Process.GetProcessesByName(RobloxProcessName);
 		if (processes.Length == 0)
@@ -296,7 +401,7 @@ public class KilgoreAPI
 			{
 				if (!IsAttached(process.Id))
 				{
-					lastResult = await Attach(process.Id);
+					lastResult = await Attach(process.Id, nocmd);
 					attachedAny = attachedAny || lastResult == KilgoreStates.Attached;
 				}
 				else
@@ -388,4 +493,24 @@ public class KilgoreAPI
 		}
 		return KilgoreStates.Executed;
 	}
+
+	public KilgoreStates Execute(int pid, string script)
+	{
+		CleanInjectedPids();
+		if (!IsAttached(pid))
+		{
+			return KilgoreStates.NotAttached;
+		}
+		NamedPipes.LuaPipe(Base64Encode(script), pid);
+		return KilgoreStates.Executed;
+	}
+
+	public KilgoreStates ExecuteScript(string script)
+	{
+		return Execute(script);
+	}
+}
+
+public class KilgoreModule : KilgoreAPI
+{
 }
